@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install Conn3x
+        env: &gh
+          GH_TOKEN: ${{ github.token }}
+        run: &install |
+          tag=$(gh release view -R conn3xorg/conn3x --json tagName -q .tagName)
+          file="conn3x_${tag#v}_linux_amd64.tar.gz"
+          cd "$RUNNER_TEMP"
+          curl -sSfLO "https://github.com/conn3xorg/conn3x/releases/download/$tag/$file"
+          curl -sSfLO "https://github.com/conn3xorg/conn3x/releases/download/$tag/checksums.txt"
+          grep " $file\$" checksums.txt | sha256sum -c -
+          mkdir -p bin && tar -xzf "$file" -C bin conn3x
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - run: conn3x version
+      - run: conn3x fmt -check -recursive
+      - name: Validate
+        run: conn3x init -backend=false && conn3x validate
+      - name: Validate the example
+        working-directory: examples/local
+        run: conn3x init -backend=false && conn3x validate
+
+  e2e:
+    needs: validate
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [rocky10, fedora45, ubuntu2404, debian13]
+    name: e2e (${{ matrix.distro }})
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The test host images live in the Conn3x repo.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: conn3xorg/conn3x
+          ref: main
+          path: conn3x
+          persist-credentials: false
+          sparse-checkout: test/images
+      - name: Install Conn3x
+        env: *gh
+        run: *install
+      - name: Start the ${{ matrix.distro }} host
+        working-directory: examples/local
+        env:
+          CONTAINERFILE: ${{ github.workspace }}/conn3x/test/images/${{ matrix.distro }}/Containerfile
+          PODMAN: sudo podman
+        run: ./up.sh
+      # Quick Tunnels are rate limited with no uptime guarantee, and a runner
+      # shares its address. Cloudflare refusing one mustn't fail the build, so
+      # the Quick Tunnel checks are skipped with a warning. Any other failure
+      # to apply still fails it.
+      - name: Apply, then plan again with no changes
+        working-directory: examples/local
+        run: |
+          conn3x init
+          for try in 1 2 3; do
+            if conn3x apply -auto-approve; then
+              conn3x plan -detailed-exitcode
+              exit 0
+            fi
+            sleep 60
+          done
+          sudo podman exec circuit-cloudflared journalctl -u cloudflared --no-pager | grep -q 'quick tunnel provisioning failed'
+          echo "::warning::Cloudflare refused a Quick Tunnel, so the Quick Tunnel checks were skipped."
+          echo QUICK_TUNNEL=refused >> "$GITHUB_ENV"
+      - name: Check the service, and fetch a page through the Quick Tunnel
+        if: env.QUICK_TUNNEL != 'refused'
+        run: |
+          sudo podman exec -i circuit-cloudflared sh -eu <<'EOF'
+          systemctl is-active cloudflared
+          cloudflared version
+          [ "$(systemctl show cloudflared -p User --value)" = cloudflared ]
+          curl -sSf 127.0.0.1:20241/ready
+          if command -v dnf >/dev/null; then dnf -qy install python3; else apt-get -qq update && apt-get -qqy install python3; fi
+          mkdir -p /srv/origin
+          echo conn3x-origin-ok > /srv/origin/index.html
+          nohup python3 -m http.server 8080 -d /srv/origin >/dev/null 2>&1 &
+          EOF
+          url=$(sudo podman exec circuit-cloudflared journalctl -u cloudflared --no-pager | grep -o 'https://[a-z0-9-]*\.trycloudflare\.com' | tail -1)
+          for _ in $(seq 36); do
+            [ "$(curl -s --max-time 10 "$url/")" = conn3x-origin-ok ] && exit 0
+            sleep 5
+          done
+          exit 1
+      # There's no real tunnel to join here, so the service can't start with a
+      # made-up token and the apply fails. That's enough to check the token
+      # reaches cloudflared on the host and nowhere else.
+      - name: Check a token stays out of state, the plan and the unit
+        working-directory: examples/local
+        run: |
+          token=$(printf '{"a":"00000000000000000000000000000000","t":"%s","s":"%s"}' "$(cat /proc/sys/kernel/random/uuid)" "$(openssl rand -base64 32)" | base64 -w0)
+          echo 'quick_tunnel_url = null' > token.tfvars
+          export TF_VAR_tunnel_token="$token"
+          conn3x plan -var-file=token.tfvars -out=token.plan > plan.txt
+          if conn3x apply -auto-approve -var-file=token.tfvars > apply.txt 2>&1; then exit 1; fi
+          unzip -p token.plan > token.plan.txt
+          if grep -aqF "$token" terraform.tfstate token.plan.txt plan.txt apply.txt; then exit 1; fi
+          sudo podman exec -i circuit-cloudflared sh -eu <<EOF
+          [ "\$(cat /etc/cloudflared/token)" = "$token" ]
+          [ "\$(stat -c '%U %a' /etc/cloudflared/token)" = "cloudflared 600" ]
+          if grep -qF "$token" /etc/systemd/system/cloudflared.service; then exit 1; fi
+          if ps -eo args | grep -v grep | grep -qF "$token"; then exit 1; fi
+          journalctl -u cloudflared --no-pager | grep -q 'Failed to get tunnel'
+          EOF
+      - name: Clean up
+        if: always()
+        working-directory: examples/local
+        env:
+          PODMAN: sudo podman
+        run: ./down.sh

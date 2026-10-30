@@ -1,0 +1,11 @@
+id_ed25519
+id_ed25519.pub
+known_hosts
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate*
+token.tfvars
+token.plan
+plan.txt
+apply.txt
+token.plan.txt
