@@ -115,9 +115,9 @@ Requires Conn3x v0.6.9 or later and systemd on each host, on amd64 or arm64, wit
 
 ## Tested on
 
-**A real named tunnel with a real token has not been run.** We have no Cloudflare account to test with, so `tunnel run` connecting, serving traffic, replicas, and a clean second plan with a token are all untested. Treat token mode as unproven until you've seen it work on your own tunnel.
+With a real tunnel and token, on an Ubuntu 24.04 droplet: the apply finished, the second plan had no changes, the service ran and registered its connections with Cloudflare, and after a reboot it came back active with a plan that had no changes. The token wasn't in state, the plan or the apply output. That run had no public hostname, so serving traffic through a named tunnel, and running replicas, haven't been tried. The Quick Tunnel checks below do fetch a page through Cloudflare.
 
-What has been run, on Rocky Linux 10, Fedora 45, Ubuntu 24.04 and Debian 13: CI applies [examples/local](examples/local) to each on amd64 with a Quick Tunnel, checks that the second plan has no changes and the service runs as the `cloudflared` user, and fetches a page from an origin on the host through the trycloudflare.com address. When Cloudflare refuses a Quick Tunnel, those checks are skipped with a warning. The CI containers run with SELinux off.
+Also run, on Rocky Linux 10, Fedora 45, Ubuntu 24.04 and Debian 13: CI applies [examples/local](examples/local) to each on amd64 with a Quick Tunnel, checks that the second plan has no changes and the service runs as the `cloudflared` user, and fetches a page from an origin on the host through the trycloudflare.com address. When Cloudflare refuses a Quick Tunnel, those checks are skipped with a warning. The CI containers run with SELinux off.
 
 CI then applies a made-up token, which Cloudflare's edge turns down with `Failed to get tunnel`. That shows the token reaches `cloudflared` from the file, and that a tunnel that can't connect fails the apply. The check confirms the token is in the file, owned by `cloudflared` with mode `0600`, and isn't in state, the plan, the apply output, the unit or the process list.
 
