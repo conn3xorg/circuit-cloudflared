@@ -64,6 +64,16 @@ circuit "cloudflared" {
     }
   }
 
+  # mkdir would make these with the login session's umask, and under
+  # circuit-hardening's 027 the cloudflared user couldn't reach its binary.
+  step "release_dir" {
+    for_each = toset(["/opt/cloudflared", dirname(local.bin)])
+    directory {
+      path = item.value
+      mode = "0755"
+    }
+  }
+
   step "binary" {
     download {
       url    = "https://github.com/cloudflare/cloudflared/releases/download/${var.cloudflared_version}/cloudflared-linux-${local.arch[each.key]}"
