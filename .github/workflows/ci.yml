@@ -102,6 +102,32 @@ jobs:
             sleep 5
           done
           exit 1
+      # Restarting the container boots systemd again, so cloudflared only
+      # comes back if it's enabled, as its own user, and the plan has nothing
+      # to do. The Quick Tunnel it asks for again can be refused like the
+      # first one, so only then is not being ready a warning.
+      - name: Restart the host, then check the service and plan
+        if: env.QUICK_TUNNEL != 'refused'
+        working-directory: examples/local
+        run: |
+          sudo podman restart circuit-cloudflared
+          for _ in $(seq 60); do
+            case $(sudo podman exec circuit-cloudflared systemctl is-system-running 2>/dev/null) in running|degraded) break ;; esac
+            sleep 1
+          done
+          conn3x plan -detailed-exitcode
+          sudo podman exec -i circuit-cloudflared sh -eu <<'EOF'
+          [ "$(systemctl show cloudflared -p User --value)" = cloudflared ]
+          for _ in $(seq 60); do
+            if curl -sf 127.0.0.1:20241/ready >/dev/null; then
+              systemctl is-active cloudflared
+              exit 0
+            fi
+            sleep 2
+          done
+          journalctl -u cloudflared -b --no-pager | grep -q 'quick tunnel provisioning failed' || exit 1
+          echo "::warning::Cloudflare refused a Quick Tunnel after the restart, so readiness wasn't checked."
+          EOF
       # There's no real tunnel to join here, so the service can't start with a
       # made-up token and the apply fails. That's enough to check the token
       # reaches cloudflared on the host and nowhere else.
