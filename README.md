@@ -10,7 +10,7 @@ Your tunnel token is passed in through an ephemeral variable. It lands in one fi
 
 ```hcl
 module "cloudflared" {
-  source = "github.com/conn3xorg/circuit-cloudflared?ref=v0.1.2"
+  source = "github.com/conn3xorg/circuit-cloudflared?ref=v0.1.3"
 
   hosts                = { nas = "192.168.1.20" }
   ssh_private_key_file = "~/.ssh/id_ed25519"
@@ -38,7 +38,7 @@ Set `quick_tunnel_url` instead of `tunnel_token`, and the service runs a [Quick 
 
 ```hcl
 module "cloudflared" {
-  source = "github.com/conn3xorg/circuit-cloudflared?ref=v0.1.2"
+  source = "github.com/conn3xorg/circuit-cloudflared?ref=v0.1.3"
 
   hosts            = { box = "203.0.113.10" }
   quick_tunnel_url = "http://localhost:8080"
